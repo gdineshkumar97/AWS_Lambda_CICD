@@ -13,11 +13,16 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v3
 
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y python3.11 python3.11-venv python3-pip jq zip
-        pip3 install boto3
+        sudo apt-get install -y jq zip
+        pip install boto3
     
     - name: Set Environment Variables
       id: set-env-vars
@@ -35,7 +40,7 @@ jobs:
     - name: Package Lambda Function
       run: |
         cd lambda_function
-        python3.11 -m venv venv
+        python -m venv venv
         source venv/bin/activate
         mkdir package
         pip install --no-cache-dir -r requirements.txt -t ./package
