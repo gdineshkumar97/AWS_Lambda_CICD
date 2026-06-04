@@ -69,17 +69,11 @@ jobs:
             --timeout 300 \
             --zip-file fileb://lambda.zip \
             --region $REGION \
-            --environment $ENV_VARS \
+            --environment "$ENV_VARS"
         else
           echo "Updating Lambda function $FUNCTION_NAME..."
           aws lambda update-function-code \
             --function-name $FUNCTION_NAME \
-            --zip-file fileb://lambda.zip \
-            --region $REGION
-
-          aws lambda update-function-configuration \
-            --function-name $FUNCTION_NAME \
-            --environment $ENV_VARS \
             --zip-file fileb://lambda.zip \
             --region $REGION
 
@@ -104,6 +98,4 @@ jobs:
             --function-name $FUNCTION_NAME \
             --environment $ENV_VARS \
             --region $REGION
-        fi
-
-        
+        fi    
