@@ -10,16 +10,16 @@ on:
       runs-on: ubuntu-latest
 
       steps:
-        -name: Checkout code
-         uses: actions/checkout@v3
+        - name: Checkout code
+          uses: actions/checkout@v3
 
-        -name: Install dependencies
+        - name: Install dependencies
           run: |
             sudo apt-get update
             sudo apt-get install -y python3.14 python3.14-venv python3.14-dev jq zip
             pip install boto3
         
-        -name: Set Environment Variables
+        - name: Set Environment Variables
           id: set-env-vars
           run: |
             if [[ "${{ github.ref_name }}" == "main" ]]; then
@@ -32,7 +32,7 @@ on:
               echo "LOG_LEVEL=INFO" >> $GITHUB_ENV
             fi
 
-        -name: Package Lambda Function
+        - name: Package Lambda Function
           run: |
             cd lambda_function
             python3.14 -m venv venv
@@ -44,8 +44,8 @@ on:
             zip -r ../lambda.zip .
             cd ../..
 
-        -name: Deploy to AWS Lambda
-         env:
+        - name: Deploy to AWS Lambda
+          env:
             AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
             AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
             AWS_REGION: us-east-1
