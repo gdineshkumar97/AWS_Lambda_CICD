@@ -5,7 +5,7 @@ import os
 
 def lambda_handler(event, context):
     
-    print("Deployment via CICD Additional Changes")
+    print("Deployment via CICD")
     print("Event received:", event)
     response = requests.get("https://api.covid19api.com/summary")
     data = response.json()
