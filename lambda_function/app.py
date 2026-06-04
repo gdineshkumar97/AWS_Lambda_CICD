@@ -7,10 +7,10 @@ def lambda_handler(event, context):
     
     print("Deployment via CICD")
     print("Event received:", event)
-    response = requests.get("https://api.covid19api.com/summary")
+    response = requests.get("https://jsonplaceholder.typicode.com/posts")
     data = response.json()
 
-    df = pandas.DataFrame(data['Countries'])
+    df = pandas.DataFrame(data)
     print(df.head())
 
     print("Environment Variables:")
