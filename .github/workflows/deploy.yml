@@ -10,27 +10,15 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    # Step 1: Check out your repository code
-    - name: Checkout repository
-      uses: actions/checkout@v4
+    - name: Checkout code
+      uses: actions/checkout@v3
 
-    - name: Set up Python 3.11
-      uses: actions/setup-python@v5
-      with:
-        python-version: 3.11
-        cache: 'pip'
-      
     - name: Install dependencies
       run: |
-        python -m pip install --upgrade pip
-        python -m pip install boto3
+        sudo apt-get update
+        sudo apt-get install -y python3.11 python3.11-venv python3-pip jq zip
+        pip3 install boto3
 
-    - name: Verify installation
-      run: |
-        python --version
-        pip --version
-        python -c "import boto3; print('Boto3 version:', boto3.__version__)"
-    
     - name: Set environment variables
       id: set-env-vars
       run: |
@@ -43,46 +31,34 @@ jobs:
           echo "API_KEY=test_api_key" >> $GITHUB_ENV
           echo "LOG_LEVEL=DEBUG" >> $GITHUB_ENV
         fi
-    
-    - name: Package Lambda Dependency in Layer
-      run: |
-        mkdir -p layer/python
-        python -m pip install --no-cache-dir -r lambda_function/requirements.txt -t layer/python
-        cd layer
-        zip -r ../layer.zip .
-        cd ..
+
     - name: Package Lambda Function
       run: |
         cd lambda_function
-        zip -r ../lambda.zip app.py
-        cd ..
+        python3.11 -m venv venv
+        source venv/bin/activate
+        mkdir package
+        pip install --no-cache-dir -r requirements.txt -t ./package
+        cp app.py ./package/
+        cd package
+        zip -r ../../lambda.zip .
+        cd ../..
+
     - name: Deploy to AWS Lambda
       env:
         AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
         AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         AWS_DEFAULT_REGION: us-east-1
+      
       run: |
         FUNCTION_NAME="cicd_lambda_${{ github.ref_name }}"
-        LAYER_NAME="cicd_lambda_layer_${{ github.ref_name }}"
         REGION="us-east-1"
         echo "Deploying to Lambda function: $FUNCTION_NAME"
-
-        LAYER_ARN=$(aws lambda publish-layer-version \
-          --layer-name "$LAYER_NAME" \
-          --zip-file fileb://layer.zip \
-          --compatible-runtimes python3.11 \
-          --description "Dependencies for $FUNCTION_NAME" \
-          --region $REGION \
-          --query 'LayerVersionArn' \
-          --output text)
-
-        echo "Published layer version: $LAYER_ARN"
 
         # Check if the Lambda function exists
         FUNCTION_EXISTS=$(aws lambda get-function --function-name $FUNCTION_NAME --region $REGION || echo "false")
 
-        # Use shell environment variables set earlier in the workflow (from $GITHUB_ENV)
-        ENV_VARS="Variables={ENV=$ENV,API_KEY=$API_KEY,LOG_LEVEL=$LOG_LEVEL}"
+        ENV_VARS="Variables={ENV=${{ env.ENV }},API_KEY=${{ env.API_KEY }},LOG_LEVEL=${{ env.LOG_LEVEL }}}"
 
         if [ "$FUNCTION_EXISTS" == "false" ]; then
           echo "Creating Lambda function $FUNCTION_NAME..."
@@ -94,8 +70,7 @@ jobs:
             --timeout 300 \
             --zip-file fileb://lambda.zip \
             --region $REGION \
-            --environment "$ENV_VARS" \
-            --layers "$LAYER_ARN"
+            --environment "$ENV_VARS"
         else
           echo "Updating Lambda function $FUNCTION_NAME..."
           aws lambda update-function-code \
@@ -123,6 +98,5 @@ jobs:
           aws lambda update-function-configuration \
             --function-name $FUNCTION_NAME \
             --region $REGION \
-            --environment "$ENV_VARS" \
-            --layers "$LAYER_ARN"
+            --environment "$ENV_VARS"
         fi
