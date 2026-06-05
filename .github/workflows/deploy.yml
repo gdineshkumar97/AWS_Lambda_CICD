@@ -71,8 +71,8 @@ jobs:
           echo "Creating Lambda function $FUNCTION_NAME..."
           aws lambda create-function \
             --function-name $FUNCTION_NAME \
-            --runtime python3.11 \
-            --role arn:aws:iam::851725469799:role/service-role/test_function-role-k06sk5ka \
+            --runtime python3.14 \
+            --role arn:aws:iam::894759052187:role/test_lambda_dev \
             --handler app.lambda_handler \
             --timeout 300 \
             --zip-file fileb://lambda.zip \
