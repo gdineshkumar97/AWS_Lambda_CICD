@@ -1,129 +1,106 @@
-name: Deploy Lambda Function
+name: Deploy Lambda
 
 on:
   push:
     branches:
       - main
       - test
-
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+    - name: Checkout code
+      uses: actions/checkout@v6
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: 3.11
+        cache: 'pip'
+    
+    # Optional step retained from your original draft 
+    - name: Install local runner dependencies
+      run: |
+        python -m pip install --upgrade pip
+        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1
+    - name: Set environment variables
+      id: set-env-vars
+      run: |
+        if [[ "${{ github.ref_name }}" == "main" ]]; then
+          echo "ENV=prod" >> $GITHUB_ENV
+          echo "API_KEY=prod_api_key" >> $GITHUB_ENV
+          echo "LOG_LEVEL=INFO" >> $GITHUB_ENV
+        else
+          echo "ENV=test" >> $GITHUB_ENV
+          echo "API_KEY=test_api_key" >> $GITHUB_ENV
+          echo "LOG_LEVEL=DEBUG" >> $GITHUB_ENV
+        fi
 
-      - name: Install Dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y zip
+    - name: Package Lambda Function
+      run: |
+        cd lambda_function
+        # 1. Create a clean, separate directory for the artifact
+        mkdir package
 
-      - name: Set Environment Variables
-        run: |
-          if [[ "${{ github.ref_name }}" == "main" ]]; then
-            echo "ENV=prod" >> $GITHUB_ENV
-            echo "API_KEY=prod_api_key" >> $GITHUB_ENV
-            echo "LOG_LEVEL=INFO" >> $GITHUB_ENV
-          else
-            echo "ENV=test" >> $GITHUB_ENV
-            echo "API_KEY=test_api_key" >> $GITHUB_ENV
-            echo "LOG_LEVEL=DEBUG" >> $GITHUB_ENV
-          fi
+        # 2. Target the package directory directly for dependencies
+        # Assuming requirements.txt is located inside the lambda_function folder. 
+        # If it is in the root directory, change the path to ../requirements.txt
+        pip install --no-cache-dir -r requirements.txt -t ./package
 
-      - name: Package Lambda Function
-        run: |
-          cd lambda_function
+        # 3. Copy your application file into the root of that package directory
+        cp app.py ./package/
 
-          rm -rf package lambda.zip
+        # 4. Zip everything from inside the folder to avoid nested directory structures
+        cd package
+        zip -r ../../lambda.zip .
+        cd ../..
 
-          mkdir -p package
+    - name: Deploy to AWS Lambda
+      env:
+        AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        AWS_DEFAULT_REGION: us-east-1
+      run: |
+        FUNCTION_NAME="cicd_lambda_${{ github.ref_name }}"
+        REGION="us-east-1"
+        echo "Deploying to Lambda function: $FUNCTION_NAME"
 
-          docker run --rm \
-            --entrypoint /bin/bash \
-            -v "$PWD":/var/task \
-            public.ecr.aws/lambda/python:3.11 \
-            -c "pip install --no-cache-dir -r requirements.txt -t package"
+        # Check if the Lambda function exists using exit codes instead of parsing output string
+        if aws lambda get-function --function-name "$FUNCTION_NAME" --region "$REGION" > /dev/null 2>&1; then
+          FUNCTION_EXISTS="true"
+        else
+          FUNCTION_EXISTS="false"
+        fi
 
-          cp app.py package/
+        ENV_VARS="Variables={ENV=${{ env.ENV }},API_KEY=${{ env.API_KEY }},LOG_LEVEL=${{ env.LOG_LEVEL }}}"
 
-          cd package
-          zip -r ../../lambda.zip .
-          cd ../..
-
-      - name: Verify Package Contents
-        run: |
-          echo "Checking package contents..."
-          unzip -l lambda.zip | grep numpy || true
-
-      - name: Deploy to AWS Lambda
-        run: |
-          FUNCTION_NAME="cicd_lambda_${{ github.ref_name }}"
-          REGION="us-east-1"
-          ROLE_ARN="arn:aws:iam::894759052187:role/test_lambda_dev"
-
-          echo "Deploying to Lambda function: $FUNCTION_NAME"
-
-          ENV_VARS="Variables={ENV=${ENV},API_KEY=${API_KEY},LOG_LEVEL=${LOG_LEVEL}}"
-
-          if aws lambda get-function \
+        if [ "$FUNCTION_EXISTS" == "false" ]; then
+          echo "Creating Lambda function $FUNCTION_NAME..."
+          aws lambda create-function \
             --function-name "$FUNCTION_NAME" \
-            --region "$REGION" > /dev/null 2>&1; then
+            --runtime python3.11 \
+            --role arn:aws:iam::894759052187:role/test_lambda_dev \
+            --handler app.lambda_handler \
+            --timeout 300 \
+            --zip-file fileb://lambda.zip \
+            --region "$REGION" \
+            --environment "$ENV_VARS"
+        else
+          echo "Updating Lambda function $FUNCTION_NAME..."
+          aws lambda update-function-code \
+            --function-name "$FUNCTION_NAME" \
+            --region "$REGION" \
+            --zip-file fileb://lambda.zip
 
-            echo "Lambda exists. Updating code..."
+          # Optimized native AWS CLI wait command instead of custom while loop
+          echo "Waiting for function code update to complete..."
+          aws lambda wait function-updated --function-name "$FUNCTION_NAME" --region "$REGION"
 
-            aws lambda update-function-code \
-              --function-name "$FUNCTION_NAME" \
-              --zip-file fileb://lambda.zip \
-              --region "$REGION"
-
-            echo "Waiting for code update to complete..."
-
-            while true; do
-              STATUS=$(aws lambda get-function \
-                --function-name "$FUNCTION_NAME" \
-                --region "$REGION" \
-                --query 'Configuration.LastUpdateStatus' \
-                --output text)
-
-              if [ "$STATUS" = "Successful" ]; then
-                echo "Code update successful"
-                break
-              elif [ "$STATUS" = "Failed" ]; then
-                echo "Code update failed"
-                exit 1
-              fi
-
-              echo "Update in progress..."
-              sleep 5
-            done
-
-            echo "Updating environment variables..."
-
-            aws lambda update-function-configuration \
-              --function-name "$FUNCTION_NAME" \
-              --region "$REGION" \
-              --environment "$ENV_VARS"
-
-          else
-
-            echo "Lambda does not exist. Creating..."
-
-            aws lambda create-function \
-              --function-name "$FUNCTION_NAME" \
-              --runtime python3.11 \
-              --role "$ROLE_ARN" \
-              --handler app.lambda_handler \
-              --timeout 300 \
-              --zip-file fileb://lambda.zip \
-              --region "$REGION" \
-              --environment "$ENV_VARS"
-
-          fi
+          # Update function configuration
+          aws lambda update-function-configuration \
+            --function-name "$FUNCTION_NAME" \
+            --region "$REGION" \
+            --environment "$ENV_VARS"
+        fi
