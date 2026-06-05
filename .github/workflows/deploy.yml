@@ -37,27 +37,25 @@ jobs:
           echo "LOG_LEVEL=DEBUG" >> $GITHUB_ENV
         fi
 
+    - name: Package Lambda Layer
+      run: |
+        cd lambda_function
+        rm -rf layer
+        mkdir -p layer/python/lib/python3.11/site-packages
+        pip install --no-cache-dir -r requirements.txt -t layer/python/lib/python3.11/site-packages
+        cd layer
+        zip -r ../../layer.zip .
+        cd ../..
+
     - name: Package Lambda Function
       run: |
         cd lambda_function
-        python -m venv venv
-        source venv/bin/activate
-        mkdir package
-        pip install --no-cache-dir -r requirements.txt -t ./package
-        cp app.py ./package/
-        cd package
-        zip -r ../../lambda.zip .
+        mkdir -p function
+        cp app.py function/
+        cd function
+        zip -r ../../function.zip .
         cd ../..
 
-    - name: Verify Package
-      run: |
-        unzip -l lambda.zip | grep numpy
-        unzip -l lambda.zip | grep pandas
-      
-    - name: Check Package Size
-      run: |
-        ls -lh lambda.zip
-      
     - name: Deploy to AWS Lambda
       env:
         AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -65,12 +63,22 @@ jobs:
         AWS_DEFAULT_REGION: us-east-1
       run: |
         FUNCTION_NAME="cicd_lambda_${{ github.ref_name }}"
+        LAYER_NAME="cicd_lambda_layer_${{ github.ref_name }}"
         REGION="us-east-1"
+        echo "Publishing Lambda layer: $LAYER_NAME"
+
+        LAYER_ARN=$(aws lambda publish-layer-version \
+          --layer-name "$LAYER_NAME" \
+          --description "Python dependencies layer for $FUNCTION_NAME" \
+          --zip-file fileb://layer.zip \
+          --compatible-runtimes python3.11 \
+          --query LayerVersionArn \
+          --output text)
+
+        echo "Published layer ARN: $LAYER_ARN"
         echo "Deploying Lambda function: $FUNCTION_NAME to region: $REGION"
 
-        # Check if the Lambda function already exists
         FUNCTION_EXISTS=$(aws lambda get-function --function-name $FUNCTION_NAME --region $REGION || echo "false")
-
         ENV_VARS="Variables={ENV=${{ env.ENV }},API_KEY=${{ env.API_KEY }},LOG_LEVEL=${{ env.LOG_LEVEL }}}"
 
         if [ "$FUNCTION_EXISTS" == "false" ]; then
@@ -81,17 +89,24 @@ jobs:
             --role arn:aws:iam::894759052187:role/service-role/test_lambda_dev \
             --handler app.lambda_handler \
             --timeout 300 \
-            --zip-file fileb://lambda.zip \
+            --zip-file fileb://function.zip \
             --region $REGION \
+            --layers "$LAYER_ARN" \
             --environment "$ENV_VARS"
         else
           echo "Updating Lambda function $FUNCTION_NAME..."
           aws lambda update-function-code \
             --function-name $FUNCTION_NAME \
-            --zip-file fileb://lambda.zip \
+            --zip-file fileb://function.zip \
             --region $REGION
 
-          # Wait for the update to complete
+          echo "Updating function configuration to attach layer and environment"
+          aws lambda update-function-configuration \
+            --function-name $FUNCTION_NAME \
+            --layers "$LAYER_ARN" \
+            --environment "$ENV_VARS" \
+            --region $REGION
+
           echo "Waiting for Lambda function $FUNCTION_NAME to be updated..."
           while true; do
             UPDATE_STATUS=$(aws lambda get-function --function-name $FUNCTION_NAME --region $REGION --query 'Configuration.LastUpdateStatus' --output text)
@@ -106,10 +121,4 @@ jobs:
               sleep 5
             fi
           done
-
-          # Update function configuration
-          aws lambda update-function-configuration \
-            --function-name $FUNCTION_NAME \
-            --environment $ENV_VARS \
-            --region $REGION
         fi    
