@@ -40,11 +40,15 @@ jobs:
         cd lambda_function
         python -m venv venv
         source venv/bin/activate
-        mkdir package
+        python -m pip install --upgrade pip
+        mkdir -p package
         pip install --no-cache-dir -r requirements.txt -t ./package
         cp app.py ./package/
+        find package -name "__pycache__" -type d -exec rm -rf {} +
+        find package -name "*.pyc" -delete
+        find package -type d \( -name "tests" -o -name "test" -o -name "docs" -o -name "doc" -o -name "examples" -o -name "benchmarks" \) -exec rm -rf {} +
         cd package
-        zip -r ../../lambda.zip .
+        zip -r ../../lambda.zip . -x "*.pyc" "*__pycache__*" "*/tests/*" "*/docs/*" "*/examples/*" "*/benchmarks/*"
         cd ../..
 
     - name: Deploy to AWS Lambda
@@ -67,7 +71,7 @@ jobs:
           echo "Creating Lambda function $FUNCTION_NAME..."
           aws lambda create-function \
             --function-name $FUNCTION_NAME \
-            --runtime python \
+            --runtime python3.11 \
             --role arn:aws:iam::851725469799:role/service-role/test_function-role-k06sk5ka \
             --handler app.lambda_handler \
             --timeout 300 \
