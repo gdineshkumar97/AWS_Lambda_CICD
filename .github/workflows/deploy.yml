@@ -19,11 +19,10 @@ jobs:
         python-version: 3.11
         cache: 'pip'
     
-    # Optional step retained from your original draft 
-    - name: Install local runner dependencies
+    - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+        pip install boto3 jq zip
 
     - name: Set environment variables
       id: set-env-vars
@@ -44,18 +43,20 @@ jobs:
         # 1. Create a clean, separate directory for the artifact
         mkdir package
 
-        # 2. Target the package directory directly for dependencies
-        # Assuming requirements.txt is located inside the lambda_function folder. 
-        # If it is in the root directory, change the path to ../requirements.txt
+        # 2. Target the package directory directly (No venv needed)
         pip install --no-cache-dir -r requirements.txt -t ./package
 
-        # 3. Copy your application file into the root of that package directory
-        cp app.py ./package/
-
-        # 4. Zip everything from inside the folder to avoid nested directory structures
+        # 3. Create the deployment package (ZIP file)
         cd package
-        zip -r ../../lambda.zip .
-        cd ../..
+        zip -r ../lambda.zip .
+
+    - name: Create Lambda Layer
+      run: |
+        cd lambda_function
+        mkdir dependency_layer
+        pip install --no-cache-dir -r requirements.txt -t ./dependency_layer/python
+        cd dependency_layer
+        zip -r ../../dependency_layer.zip .
 
     - name: Deploy to AWS Lambda
       env:
@@ -67,40 +68,48 @@ jobs:
         REGION="us-east-1"
         echo "Deploying to Lambda function: $FUNCTION_NAME"
 
-        # Check if the Lambda function exists using exit codes instead of parsing output string
-        if aws lambda get-function --function-name "$FUNCTION_NAME" --region "$REGION" > /dev/null 2>&1; then
-          FUNCTION_EXISTS="true"
-        else
-          FUNCTION_EXISTS="false"
-        fi
+        # Check if the Lambda function exists
+        FUNCTION_EXISTS=$(aws lambda get-function --function-name $FUNCTION_NAME --region $REGION || echo "false")
 
-        ENV_VARS="Variables={ENV=${{ env.ENV }},API_KEY=${{ env.API_KEY }},LOG_LEVEL=${{ env.LOG_LEVEL }}}"
+        ENV_VARS="Variables={ENV=$ENV,API_KEY=$API_KEY,LOG_LEVEL=$LOG_LEVEL}"
 
         if [ "$FUNCTION_EXISTS" == "false" ]; then
           echo "Creating Lambda function $FUNCTION_NAME..."
           aws lambda create-function \
-            --function-name "$FUNCTION_NAME" \
+            --function-name $FUNCTION_NAME \
             --runtime python3.11 \
             --role arn:aws:iam::894759052187:role/test_lambda_dev \
             --handler app.lambda_handler \
             --timeout 300 \
             --zip-file fileb://lambda.zip \
-            --region "$REGION" \
+            --region $REGION \
             --environment "$ENV_VARS"
         else
           echo "Updating Lambda function $FUNCTION_NAME..."
           aws lambda update-function-code \
-            --function-name "$FUNCTION_NAME" \
-            --region "$REGION" \
+            --function-name $FUNCTION_NAME \
+            --region $REGION \
             --zip-file fileb://lambda.zip
 
-          # Optimized native AWS CLI wait command instead of custom while loop
+          # Wait for function code update to complete
           echo "Waiting for function code update to complete..."
-          aws lambda wait function-updated --function-name "$FUNCTION_NAME" --region "$REGION"
+          while true; do
+            UPDATE_STATUS=$(aws lambda get-function --function-name $FUNCTION_NAME --region $REGION --query 'Configuration.LastUpdateStatus' --output text)
+            if [ "$UPDATE_STATUS" == "Successful" ]; then
+              echo "Function code update completed successfully."
+              break
+            elif [ "$UPDATE_STATUS" == "Failed" ]; then
+              echo "Function code update failed."
+              exit 1
+            else
+              echo "Update in progress, waiting..."
+              sleep 5
+            fi
+          done
 
           # Update function configuration
           aws lambda update-function-configuration \
-            --function-name "$FUNCTION_NAME" \
-            --region "$REGION" \
+            --function-name $FUNCTION_NAME \
+            --region $REGION \
             --environment "$ENV_VARS"
         fi
