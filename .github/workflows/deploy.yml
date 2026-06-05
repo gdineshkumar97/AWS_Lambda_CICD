@@ -100,6 +100,21 @@ jobs:
             --zip-file fileb://function.zip \
             --region $REGION
 
+          echo "Waiting for Lambda function code update to complete..."
+          while true; do
+            UPDATE_STATUS=$(aws lambda get-function --function-name $FUNCTION_NAME --region $REGION --query 'Configuration.LastUpdateStatus' --output text)
+            if [ "$UPDATE_STATUS" = "Successful" ]; then
+              echo "Lambda function $FUNCTION_NAME code updated successfully."
+              break
+            elif [ "$UPDATE_STATUS" = "Failed" ]; then
+              echo "Lambda function $FUNCTION_NAME update failed."
+              exit 1
+            else
+              echo "Update in progress..."
+              sleep 5
+            fi
+          done
+
           echo "Updating function configuration to attach layer and environment"
           aws lambda update-function-configuration \
             --function-name $FUNCTION_NAME \
@@ -107,11 +122,11 @@ jobs:
             --environment "$ENV_VARS" \
             --region $REGION
 
-          echo "Waiting for Lambda function $FUNCTION_NAME to be updated..."
+          echo "Waiting for Lambda function configuration update to complete..."
           while true; do
             UPDATE_STATUS=$(aws lambda get-function --function-name $FUNCTION_NAME --region $REGION --query 'Configuration.LastUpdateStatus' --output text)
             if [ "$UPDATE_STATUS" = "Successful" ]; then
-              echo "Lambda function $FUNCTION_NAME updated successfully."
+              echo "Lambda function $FUNCTION_NAME configuration updated successfully."
               break
             elif [ "$UPDATE_STATUS" = "Failed" ]; then
               echo "Lambda function $FUNCTION_NAME update failed."
