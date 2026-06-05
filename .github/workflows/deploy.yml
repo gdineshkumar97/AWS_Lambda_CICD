@@ -12,12 +12,16 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v3
-
+    
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    
     - name: Install dependencies
       run: |
-        sudo apt-get update
-        sudo apt-get install -y python3.11 python3.11-venv python3-pip jq zip
-        pip3 install boto3
+        python -m pip install --upgrade pip
+        python -m pip install boto3
 
     - name: Set environment variables
       id: set-env-vars
@@ -35,7 +39,7 @@ jobs:
     - name: Package Lambda Function
       run: |
         cd lambda_function
-        python3.11 -m venv venv
+        python -m venv venv
         source venv/bin/activate
         mkdir package
         pip install --no-cache-dir -r requirements.txt -t ./package
@@ -64,7 +68,7 @@ jobs:
           echo "Creating Lambda function $FUNCTION_NAME..."
           aws lambda create-function \
             --function-name $FUNCTION_NAME \
-            --runtime python3.11 \
+            --runtime python \
             --role arn:aws:iam::851725469799:role/service-role/test_function-role-k06sk5ka \
             --handler app.lambda_handler \
             --timeout 300 \
